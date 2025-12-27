@@ -15,6 +15,7 @@ tf.random.set_seed(42)
 np.random.seed(42)
 
 
+
 def ensure_directories():
     """创建必要的文件夹"""
     if not os.path.exists('checkpoints'):
