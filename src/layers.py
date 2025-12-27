@@ -120,4 +120,4 @@ class CAEMLossLayer(layers.Layer):
         self.add_metric(loss_np, name='np_loss')
         self.add_metric(loss_lp, name='lp_loss')
 
-        return total_loss
+        return x_true

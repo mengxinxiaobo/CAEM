@@ -85,18 +85,20 @@ def build_caem_model(config):
     z_hat_pred = layers.Dense(z_h_target.shape[-1], name='z_hat_pred')(ar_input)
 
     # 7. 添加联合损失层
-    # 这里不需要输出，只需要计算并 add_loss
-    loss_out = CAEMLossLayer(
+    # 这里 loss_out 实际上就是 x_current (因为我们改了 layers.py 做了透传)
+    # 把它命名为 x_current_with_loss 以示区分
+    x_current_with_loss = CAEMLossLayer(
         lambda1=config.LAMBDA1,
         lambda2=config.LAMBDA2,
         lambda3=config.LAMBDA3
     )([x_current, x_recon_current, z_f_current, z_h_target, y_h_pred, z_hat_pred])
 
     # 8. 构建模型
-    # Output: 包含预测值和重构值，用于后续推理计算异常分数
+    # 注意：outputs 列表里的第 4 个元素，原来是 x_current，现在换成 x_current_with_loss
+    # 这样 CAEMLossLayer 就变成了模型输出的上游节点，绝对不会被剪枝了！
     model = Model(
         inputs=input_seq,
-        outputs=[y_h_pred, z_hat_pred, x_recon_current, x_current, z_h_target]
+        outputs=[y_h_pred, z_hat_pred, x_recon_current, x_current_with_loss, z_h_target]
     )
 
     return model
