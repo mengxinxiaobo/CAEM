@@ -183,3 +183,40 @@ class GraphConv(layers.Layer):
             output = self.activation(output)
 
         return output
+
+
+# 修改 src/layers.py，添加 GAT 层
+class GraphAttention(layers.Layer):
+    def __init__(self, units, **kwargs):
+        super(GraphAttention, self).__init__(**kwargs)
+        self.units = units
+
+    def build(self, input_shape):
+        feature_shape = input_shape[0]
+        input_dim = feature_shape[-1]
+        self.kernel = self.add_weight(shape=(input_dim, self.units), name='kernel')
+        # 注意力向量
+        self.attn_kernel = self.add_weight(shape=(2 * self.units, 1), name='attn_kernel')
+        super(GraphAttention, self).build(input_shape)
+
+    def call(self, inputs):
+        features, adj = inputs
+        # 1. 线性变换
+        h = tf.matmul(features, self.kernel)  # (B, N, units)
+
+        # 2. 计算注意力系数 (简化版 GAT)
+        n = tf.shape(h)[1]
+        h_i = tf.repeat(h, repeats=n, axis=1)
+        h_j = tf.tile(h, [1, n, 1])
+        # 拼接 i 和 j 的特征
+        concat_h = tf.concat([h_i, h_j], axis=-1)
+        e = tf.matmul(concat_h, self.attn_kernel)
+        e = tf.reshape(e, [-1, n, n])
+        e = tf.nn.leaky_relu(e)
+
+        # 3. 结合邻接矩阵掩码进行 Softmax
+        mask = -10e9 * (1.0 - adj)
+        attention = tf.nn.softmax(e + mask, axis=-1)
+
+        # 4. 聚合邻居
+        return tf.matmul(attention, h)

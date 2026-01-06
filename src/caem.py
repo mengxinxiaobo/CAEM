@@ -129,7 +129,6 @@
 
 
 ###################################################################################################
-
 import tensorflow as tf
 from tensorflow.keras import layers, Model
 import numpy as np
@@ -149,8 +148,7 @@ def residual_gcn_block(x, units, adj, dropout_rate=0.2):
     h = GraphConv(units, activation='relu')([x, adj])
     h = layers.Dropout(dropout_rate)(h)
 
-    # 路径 2: Shortcut 路径
-    # 如果输入维度与输出维度不一致，使用 Dense 层进行线性变换以对齐维度
+    # 路径 2: Shortcut 路径 (如果维度不一致，使用 Dense 层对齐)
     shortcut = x
     if x.shape[-1] != units:
         shortcut = layers.Dense(units)(x)
@@ -165,13 +163,14 @@ def build_caem_gcn_model(config, adj_matrix):
 
     主要改进点：
     1. 引入残差 GCN 块，防止深层特征退化。
-    2. 时序预测分支由单向 LSTM 升级为双向 Bi-LSTM。
+    2. 时序预测分支由单向 LSTM 升级为双向 Bi-LSTM，增强时序感知力。
     """
     N = config.NUM_SENSORS
     T = config.TIME_STEPS
     H = config.MEMORY_WINDOW
 
-    # 将邻接矩阵转为常量 Tensor，便于在模型内部多处共享
+    # 将邻接矩阵转为常量 Tensor，便于在模型内部共享
+    # 注意：建议在 main.py 中已将 adj_matrix 处理为加权邻接矩阵
     adj_tensor = tf.constant(adj_matrix, dtype=tf.float32)
 
     # 模型输入形状: (Batch, H, N, T)
@@ -185,12 +184,12 @@ def build_caem_gcn_model(config, adj_matrix):
     x_recon_list = []
     x_input_list = []
 
-    # 遍历滑动窗口中的每一个时间步
+    # 遍历滑动窗口中的每一个时间步 (Memory Window)
     for t in range(H):
         x_t = layers.Lambda(lambda x: x[:, t, :, :])(input_seq)
         x_input_list.append(x_t)
 
-        # 获取基础图特征与重构结果
+        # 获取基础图特征 z_f 与重构结果 x_recon
         z_f_t, x_recon_t = gcn_encoder(x_t)
 
         # 计算重构误差平方特征 z_r (用于增强异常判别力)
@@ -208,25 +207,27 @@ def build_caem_gcn_model(config, adj_matrix):
         z_h_list.append(z_h_t)
         x_recon_list.append(x_recon_t)
 
-    # 组织时序预测所需的序列数据
+    # 组织时序预测所需的序列数据 (Batch, H, Dim)
     z_h_seq = layers.Lambda(lambda x: tf.stack(x, axis=1))(z_h_list)
     mem_input = layers.Lambda(lambda x: x[:, :-1, :])(z_h_seq)  # 输入: 过去 h-1 步
     z_h_target = layers.Lambda(lambda x: x[:, -1, :])(z_h_seq)  # 目标: 当前第 h 步
 
+    # 获取当前时刻数据用于 Loss 计算
     z_f_current = z_f_list[-1]
     x_recon_current = x_recon_list[-1]
     x_current = x_input_list[-1]
 
     # =========================================================
-    # 5. 分支 1: Bi-LSTM + Attention (捕捉时空动态规律)
+    # 5. 分支 1: Bi-LSTM + Attention (非线性预测)
     # =========================================================
-    # [升级] 改为双向 LSTM (Bidirectional)，并使用 concat 模式保留双向完整特征
+    # [升级] 使用双向 LSTM (Bidirectional) 捕捉过去与未来的上下文
+    # 使用 concat 模式可以保留更完整的时序特征
     lstm_out = layers.Bidirectional(
         layers.LSTM(config.HIDDEN_DIM, return_sequences=True),
         merge_mode='concat'
     )(mem_input)
 
-    # 注意：merge_mode='concat' 后，维度变为 HIDDEN_DIM * 2，Attention 层已适配
+    # 注意：merge_mode='concat' 后维度变为 HIDDEN_DIM * 2，适配 Attention 层
     context = TemporalAttention(config.HIDDEN_DIM * 2)(lstm_out)
 
     x = layers.Dropout(0.2)(context)
@@ -234,15 +235,15 @@ def build_caem_gcn_model(config, adj_matrix):
     y_h_pred = layers.Dense(z_h_target.shape[-1], name='y_h_pred')(x)
 
     # =========================================================
-    # 6. 分支 2: AR Model (捕捉线性趋势)
+    # 6. 分支 2: AR Model (线性预测)
     # =========================================================
     ar_input = layers.Flatten()(mem_input)
-    # 通过瓶颈层保留核心线性特征
+    # 瓶颈层降维捕捉核心线性特征
     ar_bottleneck = layers.Dense(128, activation='linear', name='ar_bottleneck')(ar_input)
     z_hat_pred = layers.Dense(z_h_target.shape[-1], name='z_hat_pred')(ar_bottleneck)
 
     # =========================================================
-    # 7. 添加联合损失层 (计算训练总 Loss)
+    # 7. 添加联合损失层 (J(theta))
     # =========================================================
     x_current_with_loss = CAEMLossLayer(
         lambda1=config.LAMBDA1,

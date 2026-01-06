@@ -84,14 +84,24 @@
 
 
 import numpy as np
-import tensorflow as tf
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+import tensorflow as tf
 
 
 class CAEMTrainer:
     def __init__(self, model, config):
         self.model = model
         self.config = config
+
+        # =========================================================
+        # 【核心修改】将超参数集中管理 (改这里，评估代码会自动同步)
+        # =========================================================
+        self.k = 2  # 阈值系数 (建议 0.7 ~ 1.0)
+        self.window_size = 7  # 平滑窗口大小 (建议 5, 7, 9)
+        self.lambda_mse = 0.1  # 重构误差权重 (降权以减少误报)
+        self.lambda_pred = 1.9  # 预测误差权重 (加权以利用 Bi-LSTM)
+        # =========================================================
+
         self.threshold = None
         self.threshold_mean = None
         self.threshold_std = None
@@ -104,88 +114,69 @@ class CAEMTrainer:
         y_h_pred = model_outputs[0]
         z_hat_pred = model_outputs[1]
         x_recon = model_outputs[2]
-        # model_outputs[3] 是联合 loss 层的输出 (即 x_current)
+        x_current = model_outputs[3]  # Loss层透传的真实输入
         z_h_target = model_outputs[4]
 
-        # 获取真实输入值 (通过 Loss 层的透传)
-        x_current = model_outputs[3]
-
-        # =========================================================
         # 1. 重构误差 (MSE)
-        # =========================================================
         diff = x_current - x_recon
-
-        # 自动判断维度以适配 GCN (3维) 和 CNN (4维)
-        if len(diff.shape) == 4:  # CNN 版本 (Batch, N, T, 1)
+        if len(diff.shape) == 4:  # CNN (Batch, N, T, 1)
             loss_mse = np.mean(diff ** 2, axis=(1, 2, 3))
-        else:  # GCN 版本 (Batch, N, T)
+        else:  # GCN (Batch, N, T)
             loss_mse = np.mean(diff ** 2, axis=(1, 2))
 
-        # =========================================================
-        # 2. 预测误差 (Linear & Non-linear)
-        # =========================================================
-        # 线性预测误差 (AR Branch)
+        # 2. 预测误差
+        # 线性 (AR)
         diff_lp = z_h_target - z_hat_pred
-        loss_lp = np.mean(diff_lp ** 2, axis=1)  # (Batch, )
-
-        # 非线性预测误差 (LSTM Branch)
+        loss_lp = np.mean(diff_lp ** 2, axis=1)
+        # 非线性 (Bi-LSTM)
         diff_np = z_h_target - y_h_pred
-        loss_np = np.mean(diff_np ** 2, axis=1)  # (Batch, )
+        loss_np = np.mean(diff_np ** 2, axis=1)
 
-        # =========================================================
-        # 3. 计算综合分数 (关键修改区域)
-        # =========================================================
-        # 原策略: MSE 占主导
-        # total_score = loss_mse + 0.5 * (loss_lp + loss_np)
+        # 3. 计算综合分数 (使用类属性 self.lambda_xxx)
+        total_score = self.lambda_mse * loss_mse + self.lambda_pred * (loss_lp + loss_np)
 
-        # [新策略]: 侧重于预测误差
-        # 因为 GCN 的 MSE 普遍偏高 (约0.4)，如果不降权，它会淹没 LSTM 发现的预测异常。
-        # 我们更相信 LSTM 对动作连贯性的判断。
-        lambda_mse = 0.2  # 降低重构权重
-        lambda_pred = 1.8  # 提高预测权重 (LP + NP)
-
-        total_score = lambda_mse * loss_mse + lambda_pred * (loss_lp + loss_np)
+        # 4. 滑动平滑 (使用类属性 self.window_size)
+        if len(total_score) > self.window_size:
+            smoothed_score = np.convolve(
+                total_score,
+                np.ones(self.window_size) / self.window_size,
+                mode='same'
+            )
+            return smoothed_score
 
         return total_score
 
     def calculate_threshold(self, X_train):
         """
-        使用训练集(正常数据)计算阈值
+        使用训练集计算阈值
         Threshold = Mean + k * Std
         """
         print("Calculating Threshold on Training Data...")
 
+        # 预测
         outputs = self.model.predict(X_train, batch_size=self.config.BATCH_SIZE, verbose=1)
 
+        # 计算分数
         scores = self.calculate_anomaly_score(outputs)
 
         self.threshold_mean = np.mean(scores)
         self.threshold_std = np.std(scores)
 
-        # =========================================================
-        # 阈值系数 k
-        # =========================================================
-        # 保持 k=0.2，配合新的权重策略使用
-        k = 0.25
+        # 使用类属性 self.k
+        self.threshold = self.threshold_mean + self.k * self.threshold_std
 
-        self.threshold = self.threshold_mean + k * self.threshold_std
-
-        print(
-            f"[Info] Threshold calculated: {self.threshold:.4f} (Mean: {self.threshold_mean:.4f}, Std: {self.threshold_std:.4f}, k={k})")
+        print(f"[Info] Threshold calculated: {self.threshold:.4f} "
+              f"(Mean: {self.threshold_mean:.4f}, Std: {self.threshold_std:.4f}, k={self.k})")
 
     def evaluate(self, X_test, y_test):
-        """
-        在测试集上评估模型性能
-        """
         if self.threshold is None:
             raise ValueError("Threshold not calculated! Please run calculate_threshold() first.")
 
         print("Evaluating on Test Data...")
-
         outputs = self.model.predict(X_test, batch_size=self.config.BATCH_SIZE, verbose=1)
-
         scores = self.calculate_anomaly_score(outputs)
 
+        # 判定
         y_pred = (scores > self.threshold).astype(int)
 
         precision = precision_score(y_test, y_pred)

@@ -17,9 +17,8 @@ data/
 *.npy
 
 # 模型权重与日志
-checkpoints/
 logs/
-
+checkpoints/
 
 
 # 系统文件
