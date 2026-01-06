@@ -19,7 +19,7 @@ data/
 # 模型权重与日志
 checkpoints/
 logs/
-*.h5
+
 
 
 # 系统文件
