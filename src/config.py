@@ -13,7 +13,7 @@ FEATURE_MAP_DIM = 64   # CAE 瓶颈层通道数
 
 # --- 训练参数 ---
 BATCH_SIZE = 32
-EPOCHS = 50
+EPOCHS = 100
 LEARNING_RATE = 1e-4
 
 # --- 损失权重 (Eq. 20) ---

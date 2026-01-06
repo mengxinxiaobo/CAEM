@@ -121,3 +121,65 @@ class CAEMLossLayer(layers.Layer):
         self.add_metric(loss_lp, name='lp_loss')
 
         return x_true
+
+
+
+
+
+
+
+###########################################
+# 追加到 src/layers.py 末尾
+
+class GraphConv(layers.Layer):
+    """
+    简单的图卷积层 (Graph Convolutional Layer)
+    公式: H' = Activation( A * H * W + b )
+    """
+
+    def __init__(self, units, activation='relu', use_bias=True, **kwargs):
+        super(GraphConv, self).__init__(**kwargs)
+        self.units = units
+        self.activation = tf.keras.activations.get(activation)
+        self.use_bias = use_bias
+
+    def build(self, input_shape):
+        # input_shape: [Features_Input, Adjacency_Input]
+        # Features: (Batch, Nodes, Dim)
+        # Adjacency: (Nodes, Nodes) 或 (Batch, Nodes, Nodes)
+
+        feature_shape = input_shape[0]  # (Batch, N, F)
+        input_dim = feature_shape[-1]
+
+        # 权重矩阵 W: (F, Units)
+        self.kernel = self.add_weight(shape=(input_dim, self.units),
+                                      initializer='glorot_uniform',
+                                      name='kernel')
+        if self.use_bias:
+            self.bias = self.add_weight(shape=(self.units,),
+                                        initializer='zeros',
+                                        name='bias')
+        super(GraphConv, self).build(input_shape)
+
+    def call(self, inputs):
+        # inputs = [X, A]
+        features, adj = inputs
+
+        # 1. 特征变换 (Feature Transform): H * W
+        # (Batch, N, F) dot (F, Units) -> (Batch, N, Units)
+        x = tf.matmul(features, self.kernel)
+
+        # 2. 邻居聚合 (Neighborhood Aggregation): A * (HW)
+        # 如果 A 是静态的 (N, N)，需要扩充维度
+        # 如果 A 是动态的 (Batch, N, N)，直接乘
+
+        # 这里的 adj 通常是 (N, N)，我们让它广播
+        output = tf.matmul(adj, x)
+
+        if self.use_bias:
+            output += self.bias
+
+        if self.activation is not None:
+            output = self.activation(output)
+
+        return output
