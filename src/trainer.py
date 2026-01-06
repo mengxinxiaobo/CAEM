@@ -141,8 +141,8 @@ class CAEMTrainer:
         # [新策略]: 侧重于预测误差
         # 因为 GCN 的 MSE 普遍偏高 (约0.4)，如果不降权，它会淹没 LSTM 发现的预测异常。
         # 我们更相信 LSTM 对动作连贯性的判断。
-        lambda_mse = 0.5  # 降低重构权重
-        lambda_pred = 1.5  # 提高预测权重 (LP + NP)
+        lambda_mse = 0.2  # 降低重构权重
+        lambda_pred = 1.8  # 提高预测权重 (LP + NP)
 
         total_score = lambda_mse * loss_mse + lambda_pred * (loss_lp + loss_np)
 
@@ -166,7 +166,7 @@ class CAEMTrainer:
         # 阈值系数 k
         # =========================================================
         # 保持 k=0.2，配合新的权重策略使用
-        k = 0.2
+        k = 0.25
 
         self.threshold = self.threshold_mean + k * self.threshold_std
 
